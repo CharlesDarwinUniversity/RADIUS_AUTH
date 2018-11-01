@@ -1,6 +1,6 @@
 ################################################################################
 #
-# RADIUS_AUTH - Version 1.0 - 26-10-2018
+# RADIUS_AUTH - Version 1.0.1 - 2018-11-01
 #
 ################################################################################
 #
@@ -71,10 +71,12 @@
 # RADIUS server published by Stanislas Piron (whome in turn thanks John McInnes
 # for his prior work and Kai Wilke for further assistance).
 #
+# Project home: https://github.com/CharlesDarwinUniversity/RADIUS_AUTH
+#
 ################################################################################
 
 when RULE_INIT {
-  set static::RA_timeout 5
+  set static::RA_timeout 10
   set static::RA_table "RADIUS_AUTH"
   set static::RA_pp_err "RADIUS_AUTH::parse_packet ERROR"
   set static::RA_gp_err "RADIUS_AUTH::generate_packet ERROR"
@@ -137,7 +139,7 @@ proc parse_packet { payload {key ""} {out_avp ""} {out_username ""} { req_auth "
           if { $msg_auth_offset > -1 } {
             set record_offset [expr {$msg_auth_offset+20}]
             binary scan [string replace $PAYLOAD $record_offset \
-                  [expr {$record_offset + 18}] [binary format ccH32 80 18 [string repeat 0 32]]] a* UNSIGNED_REQUEST
+                  [expr {$record_offset + 18}] [binary format ccH32 80 18 [string repeat 0 32]]] a* UNSIGNED_PAYLOAD
           }
         } elseif { [array exists AVP] } {
           array unset AVP
@@ -158,9 +160,9 @@ proc parse_packet { payload {key ""} {out_avp ""} {out_username ""} { req_auth "
           }
           if { $req_auth eq "" } {
             set req_auth [table lookup "$static::RA_table.[IP::client_addr].$IDENTIFIER.RA"]
-          }
-          if { $req_auth eq ""} {
-            error $static::RA_pp_err $static::RA_errm(4) 4
+            if { $req_auth eq ""} {
+              error $static::RA_pp_err $static::RA_errm(4) 4
+            }
           }
           set resp_auth [md5 [binary format ccSa16a[expr {$PKT_LEN-20}]a[string length $key] $CODE $IDENTIFIER \
                 $PKT_LEN $req_auth [string range $PAYLOAD 20 end] $key ]]
@@ -168,14 +170,14 @@ proc parse_packet { payload {key ""} {out_avp ""} {out_username ""} { req_auth "
             error $static::RA_pp_err $static::RA_errm(5) 5
           }
           if { [info exists AVP(80.0)] } {
-            # Patch Request Authenticator into UNSIGNED_REQUEST (see rfc2869, page 34)
-            binary scan [string replace $UNSIGNED_REQUEST 4 19 $req_auth] a* UNSIGNED_REQUEST
+            # Patch Request Authenticator into UNSIGNED_PAYLOAD (see rfc2869, page 34)
+            binary scan [string replace $UNSIGNED_PAYLOAD 4 19 $req_auth] a* UNSIGNED_PAYLOAD
           }
         }
 
         # If supplied, validate the Message-Authenticator...
         if { [info exists AVP(80.0)] && \
-                ($key eq "" || ![CRYPTO::verify -alg hmac-md5 -key $key -signature $AVP(80.0) $UNSIGNED_REQUEST]) } {
+                ($key eq "" || ![CRYPTO::verify -alg hmac-md5 -key $key -signature $AVP(80.0) $UNSIGNED_PAYLOAD]) } {
           error $static::RA_pp_err $static::RA_errm(6) 6
         }
 
@@ -215,9 +217,9 @@ proc generate_packet { code id key {in_avp ""} {force_msg_auth 0} { req_auth "" 
 
   if { $req_auth eq "" } {
     set req_auth [table lookup "$static::RA_table.[IP::client_addr].$id.RA"]
-  }
-  if { $req_auth eq "" } {
-    error $static::RA_gp_err $static::RA_errm(4) 4
+    if { $req_auth eq "" } {
+      error $static::RA_gp_err $static::RA_errm(4) 4
+    }
   }
 
   if { [info exists AVP(80.0)] } {
@@ -226,24 +228,24 @@ proc generate_packet { code id key {in_avp ""} {force_msg_auth 0} { req_auth "" 
     unset AVP(80.0)
   }
 
-  set binAVP [call RADIUS_AUTH::avp_array2bin AVP]
-  set packetLength [expr { [string length $binAVP] + 20 }]
+  set bin_AVP [call RADIUS_AUTH::avp_array2bin AVP]
+  set packet_length [expr { [string length $bin_AVP] + 20 }]
 
   if { $force_msg_auth==1 } {
-    set UNSIGNED_binAVP $binAVP[binary format ccH32 80 18 [string repeat 0 32]]
-    incr packetLength 18
-    append binAVP [binary format cc 80 18][CRYPTO::sign -alg hmac-md5 -key $key [binary format ccSa16a* \
-          $code $id $packetLength $req_auth $UNSIGNED_binAVP]]
+    set UNSIGNED_AVP $bin_AVP[binary format ccH32 80 18 [string repeat 0 32]]
+    incr packet_length 18
+    append bin_AVP [binary format cc 80 18][CRYPTO::sign -alg hmac-md5 -key $key [binary format ccSa16a* \
+          $code $id $packet_length $req_auth $UNSIGNED_AVP]]
   }
 
   if { $code==1 } { # Access-Request code...
     set authenticator $req_auth
   } else { # Assuming RADIUS response codes ( we could add $code validation here )
-    set authenticator [md5 [binary format ccSa16a[expr {$packetLength-20}]a[string length $key] \
-          $code $id $packetLength $req_auth $binAVP $key ]]
+    set authenticator [md5 [binary format ccSa16a[expr {$packet_length-20}]a[string length $key] \
+          $code $id $packet_length $req_auth $bin_AVP $key ]]
   }
 
-  return [binary format ccSa16a* $code $id $packetLength $authenticator $binAVP]
+  return [binary format ccSa16a* $code $id $packet_length $authenticator $bin_AVP]
 }
 
 ################################################################################
@@ -327,38 +329,72 @@ proc avp_bin2array { binary out_avp { out_msg_auth_offset "" } } {
 
 ################################################################################
 #
-# RADIUS_AUTH::pw_decrypt key req_auth pw
+# RADIUS_AUTH::pw_decrypt key req_auth encoded_password
 #
 ################################################################################
 #
-# Decryption algorithm for User-Password attribute.
+# Decryption algorithm for User-Password attribute, contributed by Stanislas
+# Piron.
 #
 # Returns the decrypted password.
 #
 # Example usage:
-#   set req_auth [string range [UDP::payload] 4 19]
+#   binary scan [UDP::payload] @4a16 req_auth
 #   set pw [call RADIUS_AUTH::pw_decrypt $key $req_auth $AVP(2)]
 #
 ################################################################################
-proc pw_decrypt { key req_auth pw } {
-  binary scan [md5 "$key$req_auth"] H* bx_hex
-  binary scan $pw H* px_full_hex
-  set pw_padded ""
-  for {set x 0} {$x<[string length $px_full_hex]} {set x [expr {$x+32}]} {
-    set px_hex [string range $px_full_hex $x [expr {$x+31}]]
-    set px_slice1 0x[string range $px_hex 0 15]
-    set bx_slice1 0x[string range $bx_hex 0 15]
-    set px_slice2 0x[string range $px_hex 16 31]
-    set bx_slice2 0x[string range $bx_hex 16 31]
-    append pw_padded [binary format W [expr { $px_slice1 ^ $bx_slice1 } ]]
-    append pw_padded [binary format W [expr { $px_slice2 ^ $bx_slice2 } ]]
-    binary scan [md5 "$key[binary format H* $px_hex]"] H* bx_hex
+proc pw_decrypt { key req_auth encoded_password } {
+  binary scan [md5 $key$req_auth] WW bx_64bits_1 bx_64bits_2
+  binary scan $encoded_password W* encoded_password_w_list
+  set password_list [list]
+  foreach {cx_64bits_1 cx_64bits_2} $encoded_password_w_list {
+    lappend password_list [expr { $cx_64bits_1 ^ $bx_64bits_1 }] [expr { $cx_64bits_2 ^ $bx_64bits_2 }]
+    binary scan [md5 $key[binary format WW $cx_64bits_1 $cx_64bits_2]] WW bx_64bits_1 bx_64bits_2
   }
-  binary scan $pw_padded A* pw
-  return $pw
+  binary scan [binary format W* $password_list] A* password
+  return $password
 }
 
-# Useful for manipulating NAS-IP-Address
+################################################################################
+#
+# RADIUS_AUTH::pw_encrypt key req_auth password
+#
+################################################################################
+#
+# Encryption algorithm for User-Password attribute, contributed by Stanislas
+# Piron.
+#
+# Returns the encrypted password.
+#
+# Example usage:
+#   binary scan [UDP::payload] @4a16 req_auth
+#   set AVP(2) [call RADIUS_AUTH::pw_encrypt $key $req_auth "my password"]
+#
+################################################################################
+proc pw_encrypt { key req_auth password } {
+  binary scan [md5 $key$req_auth] WW bx_64bits_1 bx_64bits_2
+  binary scan [binary format a[expr {[string length $password] + 16 - [string length $password]%16}] $password ] W* password_w_list
+  set encoded_password_list [list]
+  foreach {px_64bits_1 px_64bits_2} $password_w_list {
+  log local0. "$px_64bits_1 ^ $bx_64bits_1"
+    lappend encoded_password_list [expr { $px_64bits_1 ^ $bx_64bits_1 }] [expr { $px_64bits_2 ^ $bx_64bits_2 }]
+    binary scan [md5 $key[binary format W2 [lrange $encoded_password_list end-1 end]]] WW bx_64bits_1 bx_64bits_2
+  }
+  binary scan [binary format W* $encoded_password_list] A* encoded_password
+  return $encoded_password
+}
+
+################################################################################
+#
+# RADIUS_AUTH::ipv4_to_octets ip
+#
+################################################################################
+#
+# Useful for manipulating IPv4 attributes such as NAS-IP-Address
+#
+# Returns the 4 byte representation of an IPv4 string
+#
+################################################################################
 proc ipv4_to_octets {ip} {
   set octets [split $ip .]
   foreach oct $octets {

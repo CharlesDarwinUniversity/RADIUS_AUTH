@@ -143,6 +143,57 @@ proc run_tests {} {
 	set code 0
 	array set AVP {}
 
+  append test_log "Test password encryption/decryption with wrong req_auth breaks... "
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  set password "P4ssW0rdP4ssW0rd"
+  set en_pw [call RADIUS_AUTH::pw_encrypt $key $req_auth $password]
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  if { $password eq [call RADIUS_AUTH::pw_decrypt $key $req_auth $en_pw] } {
+    append test_log "FAILED\n"
+  } else {
+		append test_log "PASSED\n"
+	}
+
+  append test_log "Test password encryption/decryption with wrong key breaks... "
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  set password "P4ssW0rdP4ssW0rd"
+  set en_pw [call RADIUS_AUTH::pw_encrypt "Key1Key1" $req_auth $password]
+  if { $password eq [call RADIUS_AUTH::pw_decrypt "Key2Key2" $req_auth $en_pw] } {
+    append test_log "FAILED\n"
+  } else {
+		append test_log "PASSED\n"
+	}
+
+  append test_log "Test 16 character password encryption/decryption... "
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  set password "P4ssW0rdP4ssW0rd"
+  set en_pw [call RADIUS_AUTH::pw_encrypt $key $req_auth $password]
+  if { $password ne [call RADIUS_AUTH::pw_decrypt $key $req_auth $en_pw] } {
+    append test_log "FAILED\n"
+  } else {
+		append test_log "PASSED\n"
+	}
+
+  append test_log "Test 32 character password encryption/decryption... "
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  set password [call random_hex_string 32]
+  set en_pw [call RADIUS_AUTH::pw_encrypt $key $req_auth $password]
+  if { $password ne [call RADIUS_AUTH::pw_decrypt $key $req_auth $en_pw] } {
+    append test_log "FAILED\n"
+  } else {
+		append test_log "PASSED\n"
+	}
+
+  append test_log "Test 128 char password encryption/decryption... "
+  set req_auth [binary format H32 [call random_hex_string 32]]
+  set password [call random_hex_string 128]
+  set en_pw [call RADIUS_AUTH::pw_encrypt $key $req_auth $password]
+  if { $password ne [call RADIUS_AUTH::pw_decrypt $key $req_auth $en_pw] } {
+    append test_log "FAILED\n"
+  } else {
+		append test_log "PASSED\n"
+	}
+
 	append test_log "Test for failure to parse 100 bytes of random junk... "
 	set payload [binary format H* [call random_hex_string 200]]
 	if { ![catch { set code [call RADIUS_AUTH::parse_packet $payload $key AVP] } ]} {
