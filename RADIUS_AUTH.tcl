@@ -376,7 +376,6 @@ proc pw_encrypt { key req_auth password } {
   binary scan [binary format a[expr {[string length $password] + 16 - [string length $password]%16}] $password ] W* password_w_list
   set encoded_password_list [list]
   foreach {px_64bits_1 px_64bits_2} $password_w_list {
-  log local0. "$px_64bits_1 ^ $bx_64bits_1"
     lappend encoded_password_list [expr { $px_64bits_1 ^ $bx_64bits_1 }] [expr { $px_64bits_2 ^ $bx_64bits_2 }]
     binary scan [md5 $key[binary format W2 [lrange $encoded_password_list end-1 end]]] WW bx_64bits_1 bx_64bits_2
   }
