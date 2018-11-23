@@ -343,7 +343,7 @@ proc run_tests {} {
 	set error 0
 	set another_id $id
 	while { $another_id == $id } { set another_id [expr {int(rand()*255)}] }
-	table delete "$static::RA_table.[IP::client_addr].$another_id"
+	table delete "$static::RA_table.[IP::client_addr].$another_id.RA"
 	if { [catch {set payload [call RADIUS_AUTH::generate_packet 3 $another_id $key "" 0 ""]}] } {
 		append test_log "PASSED\n"
 	} else {
